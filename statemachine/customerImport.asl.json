@@ -1,0 +1,84 @@
+{
+  "Comment": "A state machine that imports customer details and notes.",
+  "StartAt": "checkCount?",
+  "States": {
+    "checkCount?": {
+      "Comment": "If customer count is present",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.count",
+          "NumericLessThan": 1,
+          "Next": "CountError"
+        }
+      ],
+      "Default": "Validate-All"
+    },
+    "Validate-All": {
+      "Type": "Map",
+      "InputPath": "$.data",
+      "ItemsPath": "$.customers",
+      "MaxConcurrency": 1,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ValidationError"
+        }
+      ],
+      "Iterator": {
+        "StartAt": "Validate",
+        "States": {
+          "Validate": {
+            "Type": "Task",
+            "Resource": "${ValidateFunctionArn}",
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.validationOutput",
+      "Next": "Save-All"
+    },
+    "Save-All": {
+      "Type": "Map",
+      "InputPath": "$.data",
+      "ItemsPath": "$.customers",
+      "MaxConcurrency": 1,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "SavingError"
+        }
+      ],
+      "Iterator": {
+        "StartAt": "save",
+        "States": {
+          "save": {
+            "Type": "Task",
+            "Resource": "${SaveCustomerFunctionArn}",
+            "End": true
+          }
+        }
+      },
+      "Next": "EndProcess"
+    },
+    "CountError": {
+      "Type": "Fail",
+      "Cause": "No customer found",
+      "Error": "No customer found"
+    },
+    "ValidationError": {
+      "Type": "Fail",
+      "Cause": "Customer details are invalid",
+      "Error": "Customer details are invalid"
+    },
+    "SavingError": {
+      "Type": "Fail",
+      "Cause": "Writing to DB failed",
+      "Error": "Writing to DB failed"
+    },
+    "EndProcess": {
+      "Type": "Pass",
+      "End": true
+    }
+  }
+}

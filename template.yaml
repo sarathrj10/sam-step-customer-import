@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Customer import using step functions
+
+Globals:
+  Function:
+    CodeUri: functions/
+    Runtime: nodejs16.x
+    Architectures:
+      - x86_64
+    Timeout: 900
+    Layers:
+      - !Ref NPMLayer
+
+Resources:
+  MyApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: dev
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: "samstepcustomerimport"
+
+  NPMLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: npm-package
+      Description: Layer that contains all the 3rd party packages
+      LicenseInfo: "Available under the MIT license."
+      ContentUri: ./NPMLayer
+      CompatibleRuntimes:
+        - nodejs16.x
+
+  ReadFileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: readFile.lambdaHandler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref S3Bucket
+        - StepFunctionsExecutionPolicy:
+            StateMachineName : !GetAtt CustomerImportStateMachine.Name
+      Environment:
+        Variables:
+          STEP_FUNC_ARN: !Sub ${CustomerImportStateMachine.Arn}
+      Events:
+        customerImportApiEvent:
+          Type: Api
+          Properties:
+            Method: get
+            Path: /trigger
+            RestApiId:
+              Ref: MyApi
+
+  ErrorLogFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: errorLog.lambdaHandler
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref CustomerTable
+
+  SaveCustomerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: saveCustomer.lambdaHandler
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref CustomerTable
+
+  ValidateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: validator.lambdaHandler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref CustomerTable
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ErrorLogFunction
+      Environment:
+        Variables:
+          LOG_FUNC_ARN: !Sub ${ErrorLogFunction.Arn}
+
+  CustomerTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: customer-table
+      PrimaryKey:
+        Name: pk
+        Type: String
+      ProvisionedThroughput:
+        ReadCapacityUnits: 2
+        WriteCapacityUnits: 2
+
+  CustomerImportStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/customerImport.asl.json
+      DefinitionSubstitutions:
+        ValidateFunctionArn: !GetAtt ValidateFunction.Arn
+        SaveCustomerFunctionArn: !GetAtt SaveCustomerFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ValidateFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref SaveCustomerFunction
+
+Outputs:
+  OutputUrl:
+    Description: "url to trigger the state machine"
+    Value: !Sub https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/dev/trigger

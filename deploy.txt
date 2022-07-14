@@ -1,0 +1,4 @@
+sam build --region us-east-1
+aws s3api create-bucket --bucket sam-step-customer-import --region us-east-1
+sam package --template-file template.yaml --s3-bucket sam-step-customer-import --output-template-file packaged.yaml
+sam deploy --region us-east-1 --template-file packaged.yaml --stack-name sam-step-customer-import --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND

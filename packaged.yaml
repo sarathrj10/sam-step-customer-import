@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Customer import using step functions
+Globals:
+  Function:
+    CodeUri: functions/
+    Runtime: nodejs16.x
+    Architectures:
+    - x86_64
+    Timeout: 900
+    Layers:
+    - Ref: NPMLayer
+Resources:
+  MyApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: dev
+    Metadata:
+      SamResourceId: MyApi
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: samstepcustomerimport
+    Metadata:
+      SamResourceId: S3Bucket
+  NPMLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: npm-package
+      Description: Layer that contains all the 3rd party packages
+      LicenseInfo: Available under the MIT license.
+      ContentUri: s3://sam-step-customer-import/388b091e9f43006c46df847071c2c3ff
+      CompatibleRuntimes:
+      - nodejs16.x
+    Metadata:
+      SamResourceId: NPMLayer
+  ReadFileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: readFile.lambdaHandler
+      Policies:
+      - S3ReadPolicy:
+          BucketName:
+            Ref: S3Bucket
+      - StepFunctionsExecutionPolicy:
+          StateMachineName:
+            Fn::GetAtt:
+            - CustomerImportStateMachine
+            - Name
+      Environment:
+        Variables:
+          STEP_FUNC_ARN:
+            Fn::Sub: ${CustomerImportStateMachine.Arn}
+      Events:
+        customerImportApiEvent:
+          Type: Api
+          Properties:
+            Method: get
+            Path: /trigger
+            RestApiId:
+              Ref: MyApi
+      CodeUri: s3://sam-step-customer-import/75d521eafd081fa1ebfec7aa3a410960
+    Metadata:
+      SamResourceId: ReadFileFunction
+  ErrorLogFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: errorLog.lambdaHandler
+      Policies:
+      - DynamoDBWritePolicy:
+          TableName:
+            Ref: CustomerTable
+      CodeUri: s3://sam-step-customer-import/75d521eafd081fa1ebfec7aa3a410960
+    Metadata:
+      SamResourceId: ErrorLogFunction
+  SaveCustomerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: saveCustomer.lambdaHandler
+      Policies:
+      - DynamoDBWritePolicy:
+          TableName:
+            Ref: CustomerTable
+      CodeUri: s3://sam-step-customer-import/75d521eafd081fa1ebfec7aa3a410960
+    Metadata:
+      SamResourceId: SaveCustomerFunction
+  ValidateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: validator.lambdaHandler
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: CustomerTable
+      - LambdaInvokePolicy:
+          FunctionName:
+            Ref: ErrorLogFunction
+      Environment:
+        Variables:
+          LOG_FUNC_ARN:
+            Fn::Sub: ${ErrorLogFunction.Arn}
+      CodeUri: s3://sam-step-customer-import/75d521eafd081fa1ebfec7aa3a410960
+    Metadata:
+      SamResourceId: ValidateFunction
+  CustomerTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: customer-table
+      PrimaryKey:
+        Name: pk
+        Type: String
+      ProvisionedThroughput:
+        ReadCapacityUnits: 2
+        WriteCapacityUnits: 2
+    Metadata:
+      SamResourceId: CustomerTable
+  CustomerImportStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri:
+        Bucket: sam-step-customer-import
+        Key: ce0db7123c041e46511a8c6841b061a0
+      DefinitionSubstitutions:
+        ValidateFunctionArn:
+          Fn::GetAtt:
+          - ValidateFunction
+          - Arn
+        SaveCustomerFunctionArn:
+          Fn::GetAtt:
+          - SaveCustomerFunction
+          - Arn
+      Policies:
+      - LambdaInvokePolicy:
+          FunctionName:
+            Ref: ValidateFunction
+      - LambdaInvokePolicy:
+          FunctionName:
+            Ref: SaveCustomerFunction
+    Metadata:
+      SamResourceId: CustomerImportStateMachine
+Outputs:
+  OutputUrl:
+    Description: url to trigger the state machine
+    Value:
+      Fn::Sub: https://${MyApi}.execute-api.${AWS::Region}.amazonaws.com/dev/trigger
